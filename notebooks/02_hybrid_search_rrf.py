@@ -81,7 +81,7 @@ def search_semantic(query: str, top_k: int = TOP_K) -> list[str]:
 
 
 # %% [markdown]
-# ## 3. TODO — implement Reciprocal Rank Fusion
+# ## 3. Reciprocal Rank Fusion
 #
 # Công thức (deck §3):
 #
@@ -100,9 +100,7 @@ def search_hybrid(query: str, top_k: int = TOP_K, rrf_k: int = RRF_K) -> list[st
     kw_ids = search_keyword(query, depth)
     sem_ids = search_semantic(query, depth)
 
-    # TODO: implement RRF fusion below.
-    # Hint: dict[doc_id, float] cộng 1/(rrf_k + rank) từ mỗi retriever.
-    # rank starts at 1, not 0.
+    # Fuse the two rankings by reciprocal rank. Rank must start at 1.
     rrf: dict[str, float] = {}
     for rank, doc_id in enumerate(kw_ids, start=1):
         rrf[doc_id] = rrf.get(doc_id, 0.0) + 1.0 / (rrf_k + rank)
@@ -163,6 +161,16 @@ for q, kw, sem, hyb in zip(golden, p_kw, p_sem, p_hyb):
     by_type[q["mode_hint"]]["sem"].append(sem)
     by_type[q["mode_hint"]]["hyb"].append(hyb)
 
+avg_kw = statistics.mean(p_kw)
+avg_sem = statistics.mean(p_sem)
+avg_hyb = statistics.mean(p_hyb)
+
+print(f"Precision@10 (avg over {len(golden)} queries):")
+print(f"  Keyword (BM25)   : {avg_kw:.1%}")
+print(f"  Semantic (vector): {avg_sem:.1%}")
+print(f"  Hybrid  (RRF=60) : {avg_hyb:.1%}")
+
+print("\nPrecision@10 by query type:")
 print(f"  {'type':12} {'n':>3}  {'kw':>7} {'sem':>7} {'hyb':>7}")
 for t in ("exact", "paraphrase", "mixed"):
     m = by_type[t]
@@ -170,6 +178,19 @@ for t in ("exact", "paraphrase", "mixed"):
           f"{statistics.mean(m['kw']):>6.1%} "
           f"{statistics.mean(m['sem']):>6.1%} "
           f"{statistics.mean(m['hyb']):>6.1%}")
+
+mixed = by_type["mixed"]
+mixed_kw = statistics.mean(mixed["kw"])
+mixed_sem = statistics.mean(mixed["sem"])
+mixed_hyb = statistics.mean(mixed["hyb"])
+
+assert avg_hyb > avg_kw and avg_hyb > avg_sem, (
+    f"hybrid must win overall, got kw={avg_kw:.3f}, sem={avg_sem:.3f}, hyb={avg_hyb:.3f}"
+)
+assert mixed_hyb > mixed_kw and mixed_hyb > mixed_sem, (
+    "hybrid must win the mixed-query slice"
+)
+print("\nNB2 verification: PASS — hybrid wins overall and on mixed queries")
 
 # %% [markdown]
 # ### Diễn giải kết quả

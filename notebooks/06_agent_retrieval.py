@@ -83,8 +83,9 @@ BUDGET = 16
 
 
 def evaluate(agent, label):
-    rec, bal, calls, ms = [], [], [], []
+    rec, bal, calls, ms, docs_returned, planned_budget = [], [], [], [], [], []
     for q in queries:
+        planned_budget.append(sum(a.top_k for a in agent.planner.plan(q["question"])))
         r = agent.answer(q["question"])
         truth, got = set(q["relevant_doc_ids"]), set(r.doc_ids)
         rec.append(len(truth & got) / len(truth))
@@ -92,18 +93,35 @@ def evaluate(agent, label):
         bal.append(min(a, b) / max(1, max(a, b)))
         calls.append(r.n_calls)
         ms.append(r.latency_ms)
+        docs_returned.append(len(r.doc_ids))
     n = len(queries)
-    print(f"{label:<14}{sum(rec)/n:8.3f}{sum(bal)/n:9.2f}{sum(calls)/n:8.1f}{sum(ms)/n:9.1f}")
-    return sum(rec) / n
+    metrics = {
+        "recall": sum(rec) / n,
+        "balance": sum(bal) / n,
+        "calls": sum(calls) / n,
+        "latency_ms": sum(ms) / n,
+        "docs": sum(docs_returned) / n,
+        "budget": max(planned_budget),
+    }
+    assert metrics["budget"] <= BUDGET
+    assert all(n_docs <= BUDGET for n_docs in docs_returned)
+    print(f"{label:<20}{metrics['budget']:8.0f}{metrics['docs']:7.1f}"
+          f"{metrics['recall']:8.3f}{metrics['balance']:9.2f}"
+          f"{metrics['calls']:8.1f}{metrics['latency_ms']:9.1f}")
+    return metrics
 
 
-print(f"{'strategy':<20}{'recall':>8}{'balance':>9}{'calls':>8}{'ms':>9}")
+print(f"{'strategy':<20}{'budget':>8}{'docs':>7}{'recall':>8}{'balance':>9}{'calls':>8}{'ms':>9}")
 base = evaluate(Agent(tool, SingleShotPlanner(budget=BUDGET)), "single-shot")
 split = evaluate(Agent(tool, RuleBasedPlanner(budget=BUDGET, use_filters=False)),
                  "agentic (no filter)")
 filt = evaluate(Agent(tool, RuleBasedPlanner(budget=BUDGET, use_filters=True)),
                 "agentic (+filter)")
-print(f"\nΔ recall vs single-shot:  tách câu {split - base:+.3f}   tách + filter {filt - base:+.3f}")
+print(f"\nΔ recall vs single-shot:  tách câu {split['recall'] - base['recall']:+.3f}   "
+      f"tách + filter {filt['recall'] - base['recall']:+.3f}")
+assert split["recall"] > base["recall"] and split["balance"] > base["balance"]
+assert filt["recall"] > base["recall"] and filt["balance"] > base["balance"]
+assert filt["recall"] < split["recall"]
 
 # %% [markdown]
 # **Đọc kết quả.** `balance` của single-shot rất thấp: nó gần như chỉ lấy *một*
@@ -178,6 +196,26 @@ print("features   :", ctx["features"] or "(chưa có — chạy NB4 trước)")
 print("affinity   :", ctx["affinity_used"])
 print("tool_args  :", ctx["tool_args"])
 print("doc_ids    :", ctx["doc_ids"][:5], "…")
+assert ctx["features"] and ctx["doc_ids"]
+
+# %% [markdown]
+# ## 6. Verification summary (screenshot evidence)
+
+# %%
+print("=" * 76)
+print("NB6 AGENTIC RETRIEVAL VERIFICATION — SAME 16-DOC BUDGET")
+print("=" * 76)
+print(f"{'strategy':<20}{'budget':>8}{'recall':>10}{'balance':>10}")
+for label, metrics in [
+    ("single-shot", base),
+    ("agentic (no filter)", split),
+    ("agentic (+filter)", filt),
+]:
+    print(f"{label:<20}{metrics['budget']:8.0f}{metrics['recall']:10.3f}{metrics['balance']:10.2f}")
+print("Why +filter < no-filter: inferred topic removes relevant neighbouring-cluster documents.")
+print("build_context features:", ctx["features"])
+print("build_context doc_ids :", ctx["doc_ids"][:5])
+print("PASS — agentic beats single-shot on recall and balance at equal budget")
 
 # %% [markdown]
 # ## Deliverable evidence

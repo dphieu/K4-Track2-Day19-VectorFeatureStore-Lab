@@ -100,11 +100,18 @@ for g in cold:
 
 print(f"cache: {len(warm)} câu   probe: {len(positives)} positive / {len(negatives)} negative\n")
 print(f"{'ngưỡng':>8}{'tiết kiệm':>12}{'trả lời sai':>14}   {'':<4}")
+sweep_rows = []
 for th in (0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95):
     saved = sum(1 for sc, ok in positives if sc >= th and ok) / len(positives)
     wrong = sum(1 for sc in negatives if sc >= th) / len(negatives)
     flag = "NGUY HIỂM" if wrong > 0.20 else ("quá chặt" if saved < 0.80 else "cân bằng")
+    sweep_rows.append((th, saved, wrong, flag))
     print(f"{th:>8.2f}{saved:>12.0%}{wrong:>14.0%}   {flag}")
+
+sweep_by_threshold = {th: (saved, wrong) for th, saved, wrong, _ in sweep_rows}
+assert sweep_by_threshold[0.75][1] > 0.20
+assert sweep_by_threshold[0.85][0] >= 0.80
+assert sweep_by_threshold[0.85][1] == 0.0
 
 # %% [markdown]
 # **Đọc bảng này thật kỹ.** Ngưỡng 0,75 — con số AWS công bố — trên corpus *này*
@@ -125,12 +132,13 @@ for th in (0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95):
 ttl_cache = SemanticCache(client=client, embedder=embedder, threshold=0.75, ttl_s=1800)
 ttl_cache.put("acme", "giá GPU hiện tại là bao nhiêu", "Khoảng $2/giờ cho A100.")
 
-for jump in (0, 600, 3600):
-    ttl_cache.advance(jump)
+for target_s in (0, 600, 3600):
+    ttl_cache.advance(target_s - ttl_cache._clock)
     hit = ttl_cache.get("acme", "giá GPU hiện tại là bao nhiêu")
     print(f"t = {ttl_cache._clock:>6.0f}s  → {'HIT' if hit else 'MISS (hết hạn)'}")
 
 print(f"\nstale evictions: {ttl_cache.stats.stale_evictions}")
+assert ttl_cache.stats.stale_evictions == 1
 
 # %% [markdown]
 # Câu hỏi nhạy thời gian ("giá hiện tại", "còn hàng không", "trạng thái đơn hàng")
@@ -158,6 +166,24 @@ safe = SemanticCache(client=client, embedder=embedder, threshold=0.70,
 safe.put("acme", "doanh thu quý 3 của chúng tôi", "Doanh thu ACME quý 3: 4,2 tỷ VND.")
 blocked = safe.get("globex", "doanh thu quý 3 của chúng tôi")
 print("\nnamespaced=True  → GLOBEX nhận được:", blocked.answer if blocked else "MISS (đúng)")
+assert stolen is not None and stolen.tenant == "acme"
+assert blocked is None
+
+# %% [markdown]
+# ## 5. Verification summary (screenshot evidence)
+
+# %%
+print("=" * 72)
+print("NB7 SEMANTIC CACHE VERIFICATION")
+print("=" * 72)
+print(f"{'threshold':>10}{'cost saved':>14}{'wrong answer':>15}")
+for th, saved, wrong, _ in sweep_rows:
+    print(f"{th:10.2f}{saved:14.0%}{wrong:15.0%}")
+print("decision: choose 0.85; threshold 0.75 still produces "
+      f"{sweep_by_threshold[0.75][1]:.0%} wrong answers")
+print("namespaced=False -> LEAK: GLOBEX received ACME answer")
+print("namespaced=True  -> MISS: cross-tenant read blocked")
+print("PASS — threshold trade-off measured and tenant isolation verified")
 
 # %% [markdown]
 # Không có exception, không có stack trace, không có dòng log đỏ. Chỉ là một

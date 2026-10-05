@@ -97,9 +97,15 @@ for c in ["searches_24h", "searches_7d", "seconds_since_last"]:
 
 # %%
 print("── key = session_id (cardinality rất cao, ~1 event/nhóm) ──")
-print(leakage_experiment(events, "session_id").round(3).to_string(index=False))
+session_leakage = leakage_experiment(events, "session_id")
+print(session_leakage.round(3).to_string(index=False))
 print("\n── key = user_id (cardinality thấp hơn, ~45 event/nhóm) ──")
-print(leakage_experiment(events, "user_id").round(3).to_string(index=False))
+user_leakage = leakage_experiment(events, "user_id")
+print(user_leakage.round(3).to_string(index=False))
+
+session_by_encoding = session_leakage.set_index("encoding")
+assert session_by_encoding.loc["target-naive", "gap"] > 0.30
+assert abs(session_by_encoding.loc["target-in-fold", "gap"]) < 0.10
 
 # %% [markdown]
 # `target-naive` trên `session_id` cho **train AUC ≈ 0.99** và **test AUC ≈ 0.52**.
@@ -131,12 +137,16 @@ ent = (events.loc[rng.random(len(events)) < 0.4,
 lat, pit = latest_join(ent, fe), pit_join(ent, fe)
 auc_lat = auc(lat["feature_value"], lat["clicked"])
 auc_pit = auc(pit["feature_value"], pit["clicked"])
+leak_fraction = leaked_row_fraction(ent, fe)
+auc_gap = auc_lat - auc_pit
 
 print(f"training rows                    : {len(ent)}")
-print(f"dòng bị rò (giá trị ghi SAU nhãn): {leaked_row_fraction(ent, fe):.1%}")
+print(f"dòng bị rò (giá trị ghi SAU nhãn): {leak_fraction:.1%}")
 print(f"\nAUC với latest-value join        : {auc_lat:.3f}   ← dùng tương lai")
 print(f"AUC với point-in-time join       : {auc_pit:.3f}   ← phục vụ được thật")
-print(f"\n'lift ảo' sẽ mất khi lên production: {auc_lat - auc_pit:+.3f} AUC")
+print(f"\n'lift ảo' sẽ mất khi lên production: {auc_gap:+.3f} AUC")
+assert leak_fraction > 0.50
+assert auc_gap > 0.0
 
 # %% [markdown]
 # Offline báo cáo một con số, production trả lại con số thấp hơn hẳn — và không
@@ -182,6 +192,27 @@ out = fs.get_online_features(
 for i in range(3):
     print(f"user={out['user_id'][i]}  avg7d={out['avg_amount_7d'][i]:>12,.0f}  "
           f"ratio={out['amount_vs_avg'][i]:6.2f}  spike={out['is_spike'][i]}")
+
+assert out["user_id"][0] == out["user_id"][1] == "u_000"
+assert out["amount_vs_avg"][0] != out["amount_vs_avg"][1]
+assert out["is_spike"][0] == 0 and out["is_spike"][1] == 1
+
+# %% [markdown]
+# ## 7. Verification summary (screenshot evidence)
+
+# %%
+print("=" * 76)
+print("NB8 FEATURE ENGINEERING VERIFICATION")
+print("=" * 76)
+print("target encoding leakage — session_id:")
+print(session_leakage.round(3).to_string(index=False))
+print(f"PIT vs latest: leaked_rows={leak_fraction:.1%} | "
+      f"latest_AUC={auc_lat:.3f} | PIT_AUC={auc_pit:.3f} | artificial_lift={auc_gap:+.3f}")
+print("on-demand feature — same user, different request amount:")
+for i in (0, 1):
+    print(f"  user={out['user_id'][i]} ratio={out['amount_vs_avg'][i]:.2f} "
+          f"spike={out['is_spike'][i]}")
+print("PASS — naive gap > 0.30, in-fold gap ≈ 0, PIT and ODFV verified")
 
 # %% [markdown]
 # Hai dòng đầu là **cùng một user, cùng một feature đã lưu** — chỉ khác `amount`

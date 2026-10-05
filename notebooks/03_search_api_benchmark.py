@@ -15,8 +15,10 @@
 
 # %%
 import _setup  # noqa: F401
+import json
 import statistics
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -31,39 +33,51 @@ import httpx
 # %%
 ROOT = Path(_setup.__file__).resolve().parent.parent
 proc = subprocess.Popen(
-    ["uvicorn", "app.main:app", "--port", "8000", "--log-level", "warning"],
+    [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000", "--log-level", "warning"],
     cwd=str(ROOT),
 )
 
 # Đợi server up + warm (Searcher.from_corpus loads embeddings + indexes 1000 docs)
 URL = "http://localhost:8000"
-for _ in range(60):
+http = httpx.Client(timeout=10.0)
+for _ in range(120):
     try:
-        r = httpx.get(f"{URL}/healthz", timeout=2.0)
+        r = http.get(f"{URL}/healthz", timeout=2.0)
         if r.status_code == 200 and r.json().get("ready"):
             break
     except httpx.HTTPError:
         pass
     time.sleep(1)
 else:
-    raise RuntimeError("API didn't become ready within 60s")
+    raise RuntimeError("API didn't become ready within 120s")
 
-print(httpx.get(f"{URL}/healthz").json())
+health = http.get(f"{URL}/healthz").json()
+assert health == {"ready": True, "n_docs": 1000}
+print(f"Health: {health}")
 
 # %% [markdown]
 # ## 2. Single query — kiểm tra response shape
 
 # %%
-r = httpx.get(f"{URL}/search", params={"q": "cloud computing tự động mở rộng", "mode": "hybrid"})
+r = http.get(f"{URL}/search", params={"q": "cloud computing tự động mở rộng", "mode": "hybrid"})
 r.raise_for_status()
 body = r.json()
-print(f"latency_ms: {body['latency_ms']:.1f}")
+required_fields = {"query", "mode", "top_k", "latency_ms", "hits"}
+required_hit_fields = {"doc_id", "title", "text", "score"}
+assert required_fields <= body.keys()
+assert body["mode"] == "hybrid" and body["top_k"] == 10
+assert body["hits"] and required_hit_fields <= body["hits"][0].keys()
+
+print("Sample API response:")
+print(f"  query={body['query']!r}")
+print(f"  mode={body['mode']!r}, top_k={body['top_k']}, latency_ms={body['latency_ms']:.1f}")
+print(f"  hit fields={sorted(body['hits'][0])}")
 print(f"top-3 hits:")
 for h in body["hits"][:3]:
     print(f"  {h['doc_id']:>14}  score={h['score']:.4f}  {h['title']}")
 
 # %% [markdown]
-# ## 3. TODO — Latency benchmark (100 queries × 3 modes)
+# ## 3. Latency benchmark (100 queries × 3 modes)
 #
 # Dùng 50 golden queries × 2 reps = 100 calls/mode. Ghi nhận latency từ
 # `body["latency_ms"]` (server-side, đã trừ network) HOẶC từ wall-clock httpx
@@ -72,10 +86,14 @@ for h in body["hits"][:3]:
 # Output: bảng P50/P95/P99 cho 3 mode.
 
 # %%
-import json
-
 DATA = ROOT / "data"
 golden = [json.loads(l) for l in (DATA / "golden_set.jsonl").open(encoding="utf-8")]
+
+# Warm the full hybrid path before collecting latency samples.
+for q in golden[:10]:
+    warmup = http.get(f"{URL}/search", params={"q": q["query"], "mode": "hybrid"})
+    warmup.raise_for_status()
+print("Warmup: 10 hybrid requests completed")
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -91,7 +109,8 @@ def benchmark_mode(mode: str, reps: int = 2) -> dict[str, float]:
     for _ in range(reps):
         for q in golden:
             t0 = time.perf_counter()
-            r = httpx.get(f"{URL}/search", params={"q": q["query"], "mode": mode})
+            r = http.get(f"{URL}/search", params={"q": q["query"], "mode": mode})
+            r.raise_for_status()
             wall_latencies.append((time.perf_counter() - t0) * 1000)
             server_latencies.append(r.json()["latency_ms"])
     return {
@@ -115,18 +134,27 @@ for mode in ("keyword", "semantic", "hybrid"):
 
 # %%
 hybrid_p99 = results["hybrid"]["p99_server"]
-print(f"Hybrid P99 server-side: {hybrid_p99:.1f}ms")
-if hybrid_p99 < 50:
-    print(f"PASS — hybrid P99 < 50ms ({hybrid_p99:.1f}ms)")
-else:
-    print(f"WARN — hybrid P99 >= 50ms ({hybrid_p99:.1f}ms)")
-    print("  Possible causes: cold cache, fastembed model not warm yet, or RRF depth=50 is too aggressive")
-    print("  Check: re-run benchmark after 10 warm-up queries; or reduce RRF depth")
+assert hybrid_p99 < 50, f"hybrid P99 must be < 50ms, got {hybrid_p99:.1f}ms"
+
+print("Sample API response:")
+print(f"  query={body['query']!r}")
+print(f"  mode={body['mode']!r}, top_k={body['top_k']}, latency_ms={body['latency_ms']:.1f}")
+print(f"  hits={len(body['hits'])}, hit fields={sorted(body['hits'][0])}")
+
+print("\nServer-side latency after 10-request warmup:")
+print(f"  {'mode':10}  {'P50':>7}  {'P95':>7}  {'P99':>7}  {'P99(wall)':>9}")
+for mode in ("keyword", "semantic", "hybrid"):
+    res = results[mode]
+    print(f"  {mode:10}  {res['p50_server']:>5.1f}ms  {res['p95_server']:>5.1f}ms  "
+          f"{res['p99_server']:>5.1f}ms  {res['p99_wall']:>7.1f}ms")
+
+print(f"\nPASS — hybrid P99 < 50ms ({hybrid_p99:.1f}ms)")
 
 # %% [markdown]
 # ## 5. Cleanup — stop the API server
 
 # %%
+http.close()
 proc.terminate()
 proc.wait(timeout=5)
 print("API server stopped")

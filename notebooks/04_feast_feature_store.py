@@ -38,7 +38,7 @@ NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
 def make_user_profile(n_users: int = 100) -> pl.DataFrame:
-    return pl.DataFrame({
+    current = pl.DataFrame({
         "user_id": [f"u_{i:03d}" for i in range(n_users)],
         "reading_speed_wpm": [180 + (i * 7) % 200 for i in range(n_users)],
         "preferred_language": ["vi" if i % 3 != 0 else "en" for i in range(n_users)],
@@ -48,6 +48,16 @@ def make_user_profile(n_users: int = 100) -> pl.DataFrame:
         ],
         "event_timestamp": [NOW - timedelta(hours=i % 48) for i in range(n_users)],
     })
+    # A deliberately older u_001 snapshot lets the PIT demo select a valid
+    # historical value while excluding u_001's newer (future) profile row.
+    historical_u001 = pl.DataFrame({
+        "user_id": ["u_001"],
+        "reading_speed_wpm": [111],
+        "preferred_language": ["vi"],
+        "topic_affinity": ["ai_ml"],
+        "event_timestamp": [NOW - timedelta(hours=4)],
+    })
+    return pl.concat([historical_u001, current])
 
 
 def make_item_popularity(n_items: int = 1000) -> pl.DataFrame:
@@ -94,6 +104,23 @@ if res.stderr:
     print("STDERR:")
     print(res.stderr)
 assert res.returncode == 0, f"feast apply failed: {res.stderr}"
+apply_stdout = res.stdout
+
+# Verify that the registry contains the three views used by this lab.
+views_res = subprocess.run(
+    ["feast", "feature-views", "list"],
+    cwd=str(FEAST_DIR),
+    capture_output=True, text=True, check=False,
+)
+print("Registered feature views:")
+print(views_res.stdout)
+assert views_res.returncode == 0, views_res.stderr
+EXPECTED_VIEWS = {
+    "user_profile_features",
+    "item_popularity_features",
+    "query_velocity_features",
+}
+assert all(name in views_res.stdout for name in EXPECTED_VIEWS)
 
 # %% [markdown]
 # ## 3. `feast materialize-incremental` — load offline → online
@@ -113,6 +140,7 @@ if res.stderr:
     print("STDERR (tail):")
     print(res.stderr[-500:])
 assert res.returncode == 0, f"materialize failed: {res.stderr}"
+materialize_stdout = res.stdout
 
 # %% [markdown]
 # ## 4. Online lookup — đo latency
@@ -144,10 +172,19 @@ features = fs.get_online_features(
 ).to_dict()
 single_latency_ms = (time.perf_counter() - t0) * 1000
 print(f"Single lookup: {single_latency_ms:.2f}ms")
-print({k: v[0] for k, v in features.items()})
+online_row = {k: v[0] for k, v in features.items()}
+print(online_row)
+assert online_row["user_id"] == "u_001"
+assert all(online_row[name] is not None for name in [
+    "reading_speed_wpm",
+    "preferred_language",
+    "topic_affinity",
+    "queries_last_hour",
+    "distinct_topics_24h",
+])
 
 # %% [markdown]
-# ## 5. TODO — Batch latency benchmark (100 lookups, P99)
+# ## 5. Batch latency benchmark (100 lookups, P99)
 
 # %%
 latencies: list[float] = []
@@ -161,18 +198,17 @@ for i in range(100):
     latencies.append((time.perf_counter() - t0) * 1000)
 
 latencies.sort()
-p50 = latencies[50]
-p95 = latencies[95]
-p99 = latencies[99]
+p50, p95, p99 = (
+    float(pl.Series(latencies).quantile(q, interpolation="linear"))
+    for q in (0.50, 0.95, 0.99)
+)
 print(f"Online lookup latency over 100 calls:")
 print(f"  P50 = {p50:.2f}ms")
 print(f"  P95 = {p95:.2f}ms")
 print(f"  P99 = {p99:.2f}ms")
 
-if p99 < 10:
-    print(f"PASS — online lookup P99 < 10ms ({p99:.2f}ms)")
-else:
-    print(f"WARN — P99 = {p99:.2f}ms (SQLite trên macOS thường tốt hơn 5ms; Linux thường tốt hơn 1ms)")
+assert p99 < 10, f"online lookup P99 must be < 10ms, got {p99:.2f}ms"
+print(f"PASS — online lookup P99 < 10ms ({p99:.2f}ms)")
 
 # %% [markdown]
 # ## 6. PIT join (offline) — đảm bảo no data leakage
@@ -194,8 +230,43 @@ historical = fs.get_historical_features(
         "user_profile_features:reading_speed_wpm",
         "user_profile_features:topic_affinity",
     ],
-).to_df()
+).to_df().sort_values("user_id").reset_index(drop=True)
 print(historical)
+assert len(historical) == 3
+
+# u_001 has snapshots at NOW-4h (111 WPM) and NOW-1h (187 WPM), while its
+# entity event is NOW-2h. PIT must select 111 and exclude the future 187 value.
+u001_pit_wpm = historical.loc[
+    historical["user_id"] == "u_001", "reading_speed_wpm"
+].iloc[0]
+assert u001_pit_wpm == 111
+assert historical.loc[historical["user_id"].isin(["u_002", "u_003"]), "reading_speed_wpm"].notna().all()
+print("PIT verification: 3 rows; u_001 uses historical 111, not future 187 (no leakage).")
+
+# %% [markdown]
+# ## 7. Verification summary (screenshot evidence)
+
+# %%
+print("=" * 72)
+print("NB4 FEAST VERIFICATION SUMMARY")
+print("=" * 72)
+print("feast apply STDOUT: SUCCESS")
+for line in apply_stdout.splitlines():
+    if "Created feature view" in line:
+        print(f"  {line.strip()}")
+for view_name in sorted(EXPECTED_VIEWS):
+    print(f"  registered: {view_name}")
+print("materialize-incremental: SUCCESS")
+for line in materialize_stdout.splitlines():
+    if "Materializing" in line or "rows" in line:
+        print(f"  {line.strip()}")
+print("online lookup u_001:")
+print(online_row)
+print(f"100-call latency: P50={p50:.2f}ms  P95={p95:.2f}ms  P99={p99:.2f}ms")
+print(f"PASS — online lookup P99 < 10ms ({p99:.2f}ms)")
+print("Point-in-Time join (3 rows):")
+print(historical.to_string(index=False))
+print("PASS — PIT join returned 3 rows; u_001 historical=111, future=187 excluded")
 
 # %% [markdown]
 # ## Deliverable evidence

@@ -88,6 +88,11 @@ for name, pred, qf in cases:
     print(f"{name:<18}{sel:7.1f}{post.recall_against(truth):8.2f}{fann_r:8.2f}"
           f"{post.latency_ms:9.1f}{fann_ms:9.1f}")
 
+tight_name, tight_sel, tight_post, tight_fann = rows[-1]
+assert tight_sel < 5.0
+assert tight_post < 0.5
+assert all(abs(row[3] - 1.0) < 1e-9 for row in rows)
+
 # %% [markdown]
 # **Đọc bảng:** filter càng chặt (`sel%` càng nhỏ), post-filter càng sập. Ở
 # `acme AND ≥2026` (~4% corpus) post-filter thường về **0.00** — nó hỏi index
@@ -109,13 +114,19 @@ truths = {q: index.pre_filter(q, pred, k=10).doc_ids for q in QUERIES}
 
 print(f"selectivity = {selectivity(index.docs, pred)*100:.1f}%  của 1000 doc\n")
 print(f"{'fetch_k':>9}{'recall':>9}{'% corpus quét':>16}")
+ladder = []
 for fk in (10, 50, 200, 500, 1000):
     r = sum(index.post_filter(q, pred, k=10, fetch_k=fk).recall_against(truths[q])
             for q in QUERIES) / len(QUERIES)
+    ladder.append((fk, r, fk / len(index.docs) * 100))
     print(f"{fk:>9}{r:9.2f}{fk/len(index.docs)*100:15.0f}%")
 
-r = sum(index.filtered_ann(q, qf, k=10).recall_against(truths[q]) for q in QUERIES) / len(QUERIES)
-print(f"{'fANN':>9}{r:9.2f}{10/len(index.docs)*100:15.0f}%")
+fann_recall = sum(index.filtered_ann(q, qf, k=10).recall_against(truths[q]) for q in QUERIES) / len(QUERIES)
+print(f"{'fANN':>9}{fann_recall:9.2f}{10/len(index.docs)*100:15.0f}%")
+recall_by_fetch = {fk: recall for fk, recall, _ in ladder}
+assert recall_by_fetch[200] < 1.0
+assert recall_by_fetch[500] == 1.0
+assert fann_recall == 1.0
 
 # %% [markdown]
 # Recall quay lại 1.00 — nhưng chỉ khi `fetch_k` ≈ **một nửa corpus**. Lúc đó
@@ -134,13 +145,32 @@ print(f"{'fANN':>9}{r:9.2f}{10/len(index.docs)*100:15.0f}%")
 # mạnh** — đó là lúc hệ thống gãy.
 
 # %%
+tenant_rows = []
 for tenant in ("acme", "globex", "initech"):
     pred_t, qf_t = tenant_filter(tenant)
     truth = index.pre_filter(QUERY, pred_t, k=10).doc_ids
     post = index.post_filter(QUERY, pred_t, k=10, fetch_k=10)
     fann = index.filtered_ann(QUERY, qf_t, k=10)
+    tenant_rows.append((tenant, post.recall_against(truth), fann.recall_against(truth)))
     print(f"tenant={tenant:<9} sel={selectivity(index.docs, pred_t)*100:5.1f}%  "
           f"post={post.recall_against(truth):.2f}  fANN={fann.recall_against(truth):.2f}")
+
+assert all(post_r < fann_r == 1.0 for _, post_r, fann_r in tenant_rows)
+
+# %% [markdown]
+# ## 5. Verification summary (screenshot evidence)
+
+# %%
+print("=" * 68)
+print("NB5 FILTERED SEARCH VERIFICATION")
+print("=" * 68)
+print(f"tight filter: {tight_name} | selectivity={tight_sel:.1f}% | "
+      f"post-filter={tight_post:.2f} | filtered-ANN={tight_fann:.2f}")
+print("over-fetch ladder:")
+for fk, recall, scanned in ladder:
+    print(f"  fetch_k={fk:4d} ({scanned:3.0f}% corpus) -> recall={recall:.2f}")
+print(f"  filtered-ANN (1% corpus) -> recall={fann_recall:.2f}")
+print("PASS — filtered-ANN keeps recall 1.00; post-filter needs 50% corpus")
 
 # %% [markdown]
 # ## Deliverable evidence

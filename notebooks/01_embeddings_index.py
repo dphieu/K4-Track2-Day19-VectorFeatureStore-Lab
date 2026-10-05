@@ -79,7 +79,7 @@ client.create_collection(
 # **Hint:** xem `app/search.py` `_build_vector_index()` để tham khảo pattern.
 
 # %%
-# TODO: implement the embed + upsert loop here.
+# Embed and upsert the complete corpus.
 # Expected outcome: client.count("lab19") == 1000
 # (~30 seconds on first run as fastembed downloads the model.)
 
@@ -132,6 +132,16 @@ hits2 = client.query_points(collection_name="lab19", query=q_vec2, limit=5).poin
 print(f"Query (paraphrase): {query2!r}")
 for h in hits2:
     print(f"  [{h.payload['topic']:>9}] score={h.score:.3f}  {h.payload['title']}")
+
+topics2 = [h.payload["topic"] for h in hits2]
+assert len(topics2) == 5, f"expected 5 hits, got {len(topics2)}"
+assert all(topic == "cloud" for topic in topics2), (
+    f"expected every paraphrase hit to be cloud, got {topics2}"
+)
+
+print(f"\nIndexed: {client.count(collection_name='lab19').count} vectors")
+print(f"Paraphrase top-5 topics: {topics2}")
+print("NB1 verification: PASS — all paraphrase hits belong to the cloud topic")
 
 # %% [markdown]
 # ## Deliverable evidence (chụp màn hình)
