@@ -164,3 +164,4 @@ print("NB1 verification: PASS — all paraphrase hits belong to the cloud topic"
 # pick the embedding model without first telling it: language(s), corpus
 # size, latency budget, and re-index cost.** Đây là 1 quyết định kiến trúc,
 # không phải boilerplate.
+

@@ -16,11 +16,13 @@ Hybrid đạt trung bình cao nhất: 78,6%, so với BM25 77,8% và Semantic 73
 
 Tôi chọn pure BM25 cho mã sản phẩm, tên biến, lỗi hoặc định danh cần khớp chính xác và latency thấp. Tôi chọn pure vector để khám phá ngữ nghĩa trên corpus đa ngữ khi exact match không quan trọng. Tôi không dùng Hybrid nếu một retriever đã đủ tốt, vì Hybrid tăng chi phí embedding, độ trễ và độ phức tạp vận hành.
 
+
 ---
 
 ## Điều ngạc nhiên nhất khi làm lab này
 
 Mô hình vector tiếng Anh không tự động thắng truy vấn paraphrase tiếng Việt; chất lượng embedding phải được đo trên đúng ngôn ngữ và corpus triển khai.
+
 
 ---
 

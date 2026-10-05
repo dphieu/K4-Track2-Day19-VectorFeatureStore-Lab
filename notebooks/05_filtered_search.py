@@ -191,3 +191,4 @@ print("PASS — filtered-ANN keeps recall 1.00; post-filter needs 50% corpus")
 # ổn. Ground truth đúng phải là "top-K chính xác **trong subset khớp filter**".
 # Nếu bạn để AI tự chọn baseline, nó thường chọn cái tiện chứ không phải cái đúng,
 # và cả bài đo trở thành vô nghĩa. Tự viết `exact_top_k()` và tự kiểm tra nó.
+

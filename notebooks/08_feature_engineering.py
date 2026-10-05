@@ -240,3 +240,4 @@ print("PASS — naive gap > 0.30, in-fold gap ≈ 0, PIT and ODFV verified")
 # encoding an toàn. Cùng một lỗi thứ-tự đó, khi xảy ra trong pipeline thật, tạo
 # ra model 0.99 AUC offline và vô dụng online. Tự viết thứ tự: **split → fit
 # encoder trên train → transform cả hai**.
+

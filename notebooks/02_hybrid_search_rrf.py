@@ -229,3 +229,4 @@ print("\nNB2 verification: PASS — hybrid wins overall and on mixed queries")
 # (không phải 1) hoặc cộng 1/rank thay vì 1/(k+rank), đã hỏng — và rất khó debug
 # về sau khi quality giảm. Đây là 1 ví dụ "AI write 5 dòng đúng đắn nhưng nếu
 # bạn không tự kiểm tra công thức, bug nằm im trong production".
+

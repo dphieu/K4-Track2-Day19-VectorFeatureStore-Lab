@@ -292,3 +292,4 @@ print("PASS — PIT join returned 3 rows; u_001 historical=111, future=187 exclu
 # bỏ lỡ tín hiệu real-time. **PIT join correctness** cũng là *think-hard* —
 # nếu data leakage xảy ra, training accuracy đẹp nhưng prod tệ 20-30% (deck §6).
 # Đừng để AI tự chọn TTL hay timestamp_field — bạn phải biết business semantics.
+
